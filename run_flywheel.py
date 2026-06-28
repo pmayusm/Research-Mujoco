@@ -16,7 +16,7 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
         step_start = time.time()
 
         
-        data.ctrl[actuator_id] = -1
+        data.ctrl[actuator_id] = 0.1
 
      
         mujoco.mj_step(model, data)

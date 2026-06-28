@@ -1,7 +1,7 @@
 <mujoco model="flywheel_test">
     <compiler meshdir="meshes"/>
     <asset>
-        <mesh name="launcher" file="simple launcher mesh.stl"/>
+        <mesh name="launcher" file="launcherCollision.obj" scale="0.001 0.001 0.001"/>
     </asset>
     <default>
         <geom contype="1" conaffinity="1"/>
@@ -13,15 +13,15 @@
             solver="PGS"/>
 
     <worldbody>
-        <body name="launcher" pos="0 0 10">
-            <geom type="mesh" mesh="launcher" contype="0" conaffinity="0"/>
+        <body name="launcher" pos="0 0 0.01">
+            <geom type="mesh" mesh="launcher" rgba="1 0 0 1"/>
         </body>
 
-        <light diffuse="5 5 5" pos="0 0 3" dir="0 0 -1"/>
-		<!-- <geom type="plane" size="100 100 10" rgba=".9 0 0 1"/> -->
+        <light diffuse="5 5 5" pos="0 0 0.05" dir="0 0 -1"/>
+		<!-- <geom type="plane" size="0.1 0.1 0.01" rgba=".9 0 0 1"/> -->
 
         <!-- Flywheel -->
-       <body name="flywheel" pos="10 10 0.2">
+       <body name="flywheel" pos="0.01 0.01 0.0002">
 
             <joint name="flywheel_joint"
                 type="hinge"
@@ -29,8 +29,8 @@
                 damping="0"/>
 
             <geom type="cylinder"
-                size="20 10"
-                density="100"
+                size="0.02 0.01"
+                density="1000"
                 friction="3 0.5 0.5"
                 euler="0 90 0"
                 rgba="0 0 1 1"/>
@@ -38,12 +38,12 @@
         </body>
 
 
-        <body name="ball" pos="10 55 50">
+        <body name="ball" pos="0.01 0.05 0.3">
             <freejoint/>
 
             <geom type="sphere"
-                size="28"
-                density="200"
+                size="0.028"
+                density="100"
                 friction="1 0.5 0.5"
                 solref="0.02 1"
                 solimp="0.9 0.95 0.001" />
