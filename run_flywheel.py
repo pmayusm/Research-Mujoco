@@ -7,7 +7,7 @@ model = mujoco.MjModel.from_xml_path("flywheel_test.xml")
 data = mujoco.MjData(model)
 
 
-actuator_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "flywheel_joint")
+actuator_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "flywheel_motor")
 
 with mujoco.viewer.launch_passive(model, data) as viewer:
     print("Simulation started. Press Ctrl+C in the terminal to exit.")
@@ -16,7 +16,7 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
         step_start = time.time()
 
         
-        data.ctrl[actuator_id] = 0.1
+        data.ctrl[actuator_id] = -0.1
 
      
         mujoco.mj_step(model, data)
