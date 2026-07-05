@@ -1,89 +1,47 @@
 <mujoco model="flywheel_test">
     <compiler meshdir="meshes"/>
-    <asset>
-        <mesh name="hood_p0" file="meshes/decomposed/hood_part_0.obj" />
-
-        <mesh name="hood_p1" file="meshes/decomposed/hood_part_1.obj" />
-
-        <mesh name="hood_p2" file="meshes/decomposed/hood_part_2.obj" />
-
-        <mesh name="hood_p3" file="meshes/decomposed/hood_part_3.obj" />
-
-        <mesh name="hood_p4" file="meshes/decomposed/hood_part_4.obj" />
-
-        <mesh name="hood_p5" file="meshes/decomposed/hood_part_5.obj" />
-
-        <mesh name="hood_p6" file="meshes/decomposed/hood_part_6.obj" />
-
-        <mesh name="hood_p7" file="meshes/decomposed/hood_part_7.obj" />
-
-        <mesh name="hood_p8" file="meshes/decomposed/hood_part_8.obj" />
-
-        <mesh name="hood_p9" file="meshes/decomposed/hood_part_9.obj" />
-
-        <mesh name="hood_p10" file="meshes/decomposed/hood_part_10.obj" />
-
-        <mesh name="hood_p11" file="meshes/decomposed/hood_part_11.obj" />
-
-        <mesh name="hood_p12" file="meshes/decomposed/hood_part_12.obj" />
-
-        <mesh name="hood_p13" file="meshes/decomposed/hood_part_13.obj" />
-
-        <mesh name="hood_p14" file="meshes/decomposed/hood_part_14.obj" />
-
-        <mesh name="hood_p15" file="meshes/decomposed/hood_part_15.obj" />
-
-        <mesh name="hood_p16" file="meshes/decomposed/hood_part_16.obj" />
-
-        <mesh name="hood_p17" file="meshes/decomposed/hood_part_17.obj" />
-
-        <mesh name="hood_p18" file="meshes/decomposed/hood_part_18.obj" />
-
-        <mesh name="hood_p19" file="meshes/decomposed/hood_part_19.obj" />
-
-        <mesh name="hood_p20" file="meshes/decomposed/hood_part_20.obj" />
-
-        <mesh name="hood_p21" file="meshes/decomposed/hood_part_21.obj" />
-
-        <mesh name="hood_p22" file="meshes/decomposed/hood_part_22.obj" />
-
-        <mesh name="hood_p23" file="meshes/decomposed/hood_part_23.obj" />
-
-        <mesh name="hood_p24" file="meshes/decomposed/hood_part_24.obj" />
-
-        <mesh name="hood_p25" file="meshes/decomposed/hood_part_25.obj" />
-
-        <mesh name="hood_p26" file="meshes/decomposed/hood_part_26.obj" />
-
-        <mesh name="hood_p27" file="meshes/decomposed/hood_part_27.obj" />
-
-        <mesh name="hood_p28" file="meshes/decomposed/hood_part_28.obj" />
-
-        <mesh name="hood_p29" file="meshes/decomposed/hood_part_29.obj" />
-
-        <mesh name="hood_p30" file="meshes/decomposed/hood_part_30.obj" />
-
-        <mesh name="hood_p31" file="meshes/decomposed/hood_part_31.obj" />
-
-        <mesh name="hood_p32" file="meshes/decomposed/hood_part_32.obj" />
-
-        <mesh name="hood_p33" file="meshes/decomposed/hood_part_33.obj" />
-
-        <mesh name="hood_p34" file="meshes/decomposed/hood_part_34.obj" />
-
-        <mesh name="hood_p35" file="meshes/decomposed/hood_part_35.obj" />
-
-        <mesh name="hood_p36" file="meshes/decomposed/hood_part_36.obj" />
-
-        <mesh name="hood_p37" file="meshes/decomposed/hood_part_37.obj" />
-
-        <mesh name="hood_p38" file="meshes/decomposed/hood_part_38.obj" />
-
-        <mesh name="hood_p39" file="meshes/decomposed/hood_part_39.obj" /> 
-
-        <mesh name="flywheel" file="flywheel.stl" scale="1 1 1"/>
-        <mesh name="launcher_middle_hood" file="Launcher middle hood.stl" scale="0.001 0.001 0.001"/>
-        <mesh name="turntable_big_gear" file="turntable big gear.stl" scale="0.001 0.001 0.001"/>
+   <asset>
+        <mesh name="flywheel" file="flywheel.stl" scale="10 10 10" />
+        <mesh name="hood_p0" file="decomposed/hood_part_0.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p1" file="decomposed/hood_part_1.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p2" file="decomposed/hood_part_2.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p3" file="decomposed/hood_part_3.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p4" file="decomposed/hood_part_4.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p5" file="decomposed/hood_part_5.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p6" file="decomposed/hood_part_6.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p7" file="decomposed/hood_part_7.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p8" file="decomposed/hood_part_8.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p9" file="decomposed/hood_part_9.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p10" file="decomposed/hood_part_10.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p11" file="decomposed/hood_part_11.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p12" file="decomposed/hood_part_12.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p13" file="decomposed/hood_part_13.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p14" file="decomposed/hood_part_14.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p15" file="decomposed/hood_part_15.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p16" file="decomposed/hood_part_16.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p17" file="decomposed/hood_part_17.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p18" file="decomposed/hood_part_18.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p19" file="decomposed/hood_part_19.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p20" file="decomposed/hood_part_20.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p21" file="decomposed/hood_part_21.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p22" file="decomposed/hood_part_22.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p23" file="decomposed/hood_part_23.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p24" file="decomposed/hood_part_24.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p25" file="decomposed/hood_part_25.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p26" file="decomposed/hood_part_26.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p27" file="decomposed/hood_part_27.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p28" file="decomposed/hood_part_28.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p29" file="decomposed/hood_part_29.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p30" file="decomposed/hood_part_30.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p31" file="decomposed/hood_part_31.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p32" file="decomposed/hood_part_32.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p33" file="decomposed/hood_part_33.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p34" file="decomposed/hood_part_34.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p35" file="decomposed/hood_part_35.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p36" file="decomposed/hood_part_36.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p37" file="decomposed/hood_part_37.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p38" file="decomposed/hood_part_38.obj" scale="0.01 0.01 0.01" />
+        <mesh name="hood_p39" file="decomposed/hood_part_39.obj" scale="0.01 0.01 0.01" />
     </asset>
     <default>
         <geom contype="1" conaffinity="1"/>
@@ -95,16 +53,8 @@
             solver="PGS"/>
 
     <worldbody>
-        <body name="launcher" pos="0 0 0.01">
-            <geom type="mesh" mesh="launcher_middle_hood" rgba="1 0 0 1"/>
-            <geom type="mesh" mesh="turntable_big_gear" rgba="0.5 0.5 0.5 1"/>
-        </body>
-
-        <light diffuse="5 5 5" pos="0 0 0.05" dir="0 0 -1"/>
-		<!-- <geom type="plane" size="0.1 0.1 0.01" rgba=".9 0 0 1"/> -->
-
-        <!-- Flywheel -->
-       <body name="flywheel" pos="0.05 0.2 0.135" euler="0 0 -15">
+        <body name="launcher_middle_hood" pos="0 0 0.5">
+            <!-- Ensure your position/orientation attributes match your scene layout -->
             <geom type="mesh" mesh="hood_p0" rgba="0.2 0.6 0.8 1" condim="3" />
             <geom type="mesh" mesh="hood_p1" rgba="0.2 0.6 0.8 1" condim="3" />
             <geom type="mesh" mesh="hood_p2" rgba="0.2 0.6 0.8 1" condim="3" />
@@ -145,7 +95,13 @@
             <geom type="mesh" mesh="hood_p37" rgba="0.2 0.6 0.8 1" condim="3" />
             <geom type="mesh" mesh="hood_p38" rgba="0.2 0.6 0.8 1" condim="3" />
             <geom type="mesh" mesh="hood_p39" rgba="0.2 0.6 0.8 1" condim="3" />
+        </body>
 
+        <light diffuse="5 5 5" pos="0 0 0.05" dir="0 0 -1"/>
+		<!-- <geom type="plane" size="0.1 0.1 0.01" rgba=".9 0 0 1"/> -->
+
+        <!-- Flywheel -->
+       <body name="flywheel" pos="0.45 2.1 1.85" euler="0 0 -15">
             <joint name="flywheel_joint"
                 type="hinge"
                 axis="1 0 0"
@@ -161,11 +117,11 @@
         </body>
 
 
-        <body name="ball" pos="0.01 0.2 0.3">
+        <body name="ball" pos="0.1 1.2 2">
             <freejoint/>
 
             <geom type="sphere"
-                size="0.06"
+                size="0.6"
                 density="100"
                 friction="1 0.5 0.5"
                 solref="0.02 1"
@@ -176,7 +132,7 @@
 
     <actuator>
         <motor name="flywheel_motor" joint="flywheel_joint"
-            gear="0.05"
+            gear="2000"
             ctrlrange="-1 1"/>
     </actuator>
 
