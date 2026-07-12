@@ -8,6 +8,7 @@ data = mujoco.MjData(model)
 
 
 actuator_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "flywheel_motor")
+yaw_motor_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "yaw_motor")
 
 with mujoco.viewer.launch_passive(model, data) as viewer:
     print("Simulation started. Press Ctrl+C in the terminal to exit.")
@@ -17,6 +18,7 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
 
         
         data.ctrl[actuator_id] = -1
+        data.ctrl[yaw_motor_id] = 0
 
      
         mujoco.mj_step(model, data)

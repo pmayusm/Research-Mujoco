@@ -54,7 +54,10 @@
 
     <worldbody>
         <body name="launcher_middle_hood" pos="0 0 0.5">
-            <!-- Ensure your position/orientation attributes match your scene layout -->
+            <joint name="yaw joint"
+                type="hinge"
+                axis="0 0 1"
+                damping="0.005"/>
             <geom type="mesh" mesh="hood_p0" rgba="0.2 0.6 0.8 1" condim="3" />
             <geom type="mesh" mesh="hood_p1" rgba="0.2 0.6 0.8 1" condim="3" />
             <geom type="mesh" mesh="hood_p2" rgba="0.2 0.6 0.8 1" condim="3" />
@@ -95,26 +98,25 @@
             <geom type="mesh" mesh="hood_p37" rgba="0.2 0.6 0.8 1" condim="3" />
             <geom type="mesh" mesh="hood_p38" rgba="0.2 0.6 0.8 1" condim="3" />
             <geom type="mesh" mesh="hood_p39" rgba="0.2 0.6 0.8 1" condim="3" />
+
+            <!-- Flywheel -->
+            <body name="flywheel" pos="0.45 2.1 1.35" euler="0 0 -15">
+                <joint name="flywheel_joint"
+                    type="hinge"
+                    axis="1 0 0"
+                    damping="0.005"/>
+
+                <geom type="mesh"
+                    mesh="flywheel"
+                    density="1000"
+                    friction="3 0.5 0.5"
+                    euler="0 90 0"
+                    rgba="0 0 1 1"/>
+            </body>
         </body>
 
         <light diffuse="5 5 5" pos="0 0 0.05" dir="0 0 -1"/>
 		<!-- <geom type="plane" size="0.1 0.1 0.01" rgba=".9 0 0 1"/> -->
-
-        <!-- Flywheel -->
-       <body name="flywheel" pos="0.45 2.1 1.85" euler="0 0 -15">
-            <joint name="flywheel_joint"
-                type="hinge"
-                axis="1 0 0"
-                damping="0.005"/>
-
-            <geom type="mesh"
-                mesh="flywheel"
-                density="1000"
-                friction="3 0.5 0.5"
-                euler="0 90 0"
-                rgba="0 0 1 1"/>
-
-        </body>
 
 
         <body name="ball" pos="0.1 1.2 2">
@@ -133,6 +135,9 @@
     <actuator>
         <motor name="flywheel_motor" joint="flywheel_joint"
             gear="2000"
+            ctrlrange="-1 1"/>
+         <motor name="yaw_motor" joint="yaw joint"
+            gear="200"
             ctrlrange="-1 1"/>
     </actuator>
 
