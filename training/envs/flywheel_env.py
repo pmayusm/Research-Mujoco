@@ -71,7 +71,11 @@ class FlywheelVecEnv(VecEnv):
 
         self.episode_length_buf = torch.zeros(num_envs, dtype=torch.long, device=device)
         self.ball_spawned = np.zeros(num_envs, dtype=bool)
-        self.best_lateral = np.full(num_envs, np.inf, dtype=np.float64)
+        # Tracks the best (smallest) miss_distance seen during flight. miss_distance
+        # accounts for remaining depth-to-target until the ball passes the target's
+        # plane, unlike pure lateral offset, which is ~0 at the muzzle by construction
+        # (the target is always oriented to face the shooter spawn point) and would
+        # otherwise saturate the reward on the very first post-spawn step.
         self.best_miss = np.full(num_envs, np.inf, dtype=np.float64)
         self.prev_accuracy = np.zeros(num_envs, dtype=np.float64)
         self.pre_step_ball_pos = np.zeros((num_envs, 3), dtype=np.float64)
@@ -156,19 +160,19 @@ class FlywheelVecEnv(VecEnv):
                         env_id,
                         outcome,
                         impact_lateral=impact_lateral,
-                        best_lateral=self._finite_best_lateral(env_id),
+                        best_miss=self._finite_best_miss(env_id),
                         episode_length=int(self.episode_length_buf[env_id].item()),
                     )
 
             if self.episode_length_buf[env_id].item() >= self.max_episode_length and not dones[env_id]:
-                rewards[env_id] += compute_miss_score(self.best_lateral[env_id])
+                rewards[env_id] += compute_miss_score(self.best_miss[env_id])
                 dones[env_id] = True
                 extras["log"]["/episode/timeout"] = 1.0
                 self._record_episode_done(
                     extras,
                     env_id,
                     "timeout",
-                    best_lateral=self._finite_best_lateral(env_id),
+                    best_miss=self._finite_best_miss(env_id),
                     episode_length=int(self.episode_length_buf[env_id].item()),
                 )
 
@@ -203,7 +207,6 @@ class FlywheelVecEnv(VecEnv):
 
         self.episode_length_buf[env_id] = 0
         self.ball_spawned[env_id] = False
-        self.best_lateral[env_id] = np.inf
         self.best_miss[env_id] = np.inf
         self.prev_accuracy[env_id] = 0.0
 
@@ -233,12 +236,16 @@ class FlywheelVecEnv(VecEnv):
         ball_pos = handles.data.xpos[handles.ball_id].copy()
         slab_pos = handles.data.xpos[handles.body_id].copy()
         plane_normal = handles.data.xmat[handles.body_id].reshape(3, 3)[:, 2]
-        _, lateral_distance, _ = compute_closeness(
+        # Use miss_distance (not lateral_distance): lateral_distance is the purely
+        # tangential offset from the target's boresight, which is ~0 right at the
+        # muzzle by construction and would saturate the reward immediately. miss_distance
+        # also accounts for the remaining depth to the target until the ball passes it.
+        miss_distance, _, _ = compute_closeness(
             ball_pos, slab_pos, plane_normal, handles.target_half_thickness
         )
 
-        self.best_lateral[env_id] = min(self.best_lateral[env_id], lateral_distance)
-        accuracy = compute_target_reward(lateral_distance)
+        self.best_miss[env_id] = min(self.best_miss[env_id], miss_distance)
+        accuracy = compute_target_reward(miss_distance)
         progress = max(0.0, accuracy - self.prev_accuracy[env_id])
         self.prev_accuracy[env_id] = accuracy
         return DENSE_REWARD_SCALE * progress
@@ -278,15 +285,15 @@ class FlywheelVecEnv(VecEnv):
                 return compute_hit_score(impact_distance), True, "hit", impact_distance
 
         if ball_pos[2] <= handles.floor_z + handles.ball_radius:
-            return compute_miss_score(self.best_lateral[env_id]), True, "floor", None
+            return compute_miss_score(self.best_miss[env_id]), True, "floor", None
 
         return 0.0, False, "running", None
 
-    def _finite_best_lateral(self, env_id: int) -> float | None:
-        best_lateral = self.best_lateral[env_id]
-        if np.isinf(best_lateral):
+    def _finite_best_miss(self, env_id: int) -> float | None:
+        best_miss = self.best_miss[env_id]
+        if np.isinf(best_miss):
             return None
-        return float(best_lateral)
+        return float(best_miss)
 
     @staticmethod
     def _record_episode_done(
@@ -295,7 +302,7 @@ class FlywheelVecEnv(VecEnv):
         outcome: str,
         *,
         impact_lateral: float | None = None,
-        best_lateral: float | None = None,
+        best_miss: float | None = None,
         episode_length: int | None = None,
     ) -> None:
         extras.setdefault("episode_done", []).append(
@@ -304,7 +311,7 @@ class FlywheelVecEnv(VecEnv):
                 "outcome": outcome,
                 "episode_length": episode_length,
                 "impact_lateral": impact_lateral,
-                "best_lateral": best_lateral,
+                "best_miss": best_miss,
             }
         )
 
@@ -336,13 +343,13 @@ class FlywheelVecEnv(VecEnv):
             target_pos = handles.data.xpos[handles.body_id]
             target_local = hood_rot.T @ (target_pos - hood_pos)
             plane_normal = handles.data.xmat[handles.body_id].reshape(3, 3)[:, 2]
-            _, lateral_distance, face_distance = compute_closeness(
+            miss_distance, _, face_distance = compute_closeness(
                 ball_pos, target_pos, plane_normal, handles.target_half_thickness
             )
 
-            best_lateral = self.best_lateral[env_id]
-            if np.isinf(best_lateral):
-                best_lateral = lateral_distance
+            best_miss = self.best_miss[env_id]
+            if np.isinf(best_miss):
+                best_miss = miss_distance
 
             policy[env_id] = np.array(
                 [
@@ -354,7 +361,7 @@ class FlywheelVecEnv(VecEnv):
                     ball_vel_local[0] / 20.0,
                     ball_vel_local[1] / 20.0,
                     ball_vel_local[2] / 20.0,
-                    best_lateral / 6.0,
+                    best_miss / 6.0,
                     float(self.ball_spawned[env_id]),
                 ],
                 dtype=np.float32,

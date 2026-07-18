@@ -62,7 +62,7 @@ def stats(values: list[float]) -> dict[str, float | None]:
 
 def enrich_episode(record: dict, episode_id: int) -> dict:
     impact_lateral = record.get("impact_lateral")
-    best_lateral = record.get("best_lateral")
+    best_miss = record.get("best_miss")
     return {
         "episode_id": episode_id,
         "env_id": record["env_id"],
@@ -70,9 +70,9 @@ def enrich_episode(record: dict, episode_id: int) -> dict:
         "episode_length": record.get("episode_length"),
         "return": record["return"],
         "impact_lateral_m": impact_lateral,
-        "best_lateral_m": best_lateral,
+        "best_miss_m": best_miss,
         "hit_score": compute_hit_score(impact_lateral) if impact_lateral is not None else None,
-        "miss_score": compute_miss_score(best_lateral) if best_lateral is not None else None,
+        "miss_score": compute_miss_score(best_miss) if best_miss is not None else None,
     }
 
 
@@ -90,12 +90,12 @@ def build_report(episodes: list[dict], checkpoint: str, num_envs: int, stochasti
     hit_scores = [ep["hit_score"] for ep in episodes if ep["hit_score"] is not None]
 
     miss_best = [
-        ep["best_lateral_m"]
+        ep["best_miss_m"]
         for ep in episodes
-        if ep["outcome"] in {"floor", "timeout"} and ep["best_lateral_m"] is not None
+        if ep["outcome"] in {"floor", "timeout"} and ep["best_miss_m"] is not None
     ]
     miss_scores = [ep["miss_score"] for ep in episodes if ep["miss_score"] is not None]
-    all_best = [ep["best_lateral_m"] for ep in episodes if ep["best_lateral_m"] is not None]
+    all_best = [ep["best_miss_m"] for ep in episodes if ep["best_miss_m"] is not None]
 
     report_data = {
         "checkpoint": checkpoint,
@@ -149,13 +149,13 @@ def build_report(episodes: list[dict], checkpoint: str, num_envs: int, stochasti
         lines.append("Hit impact distance (m): no hits recorded")
 
     if miss_best:
-        lines.append(f"Miss best lateral (m):     {summarize(miss_best)}")
-        lines.append(f"Miss score:                {summarize(miss_scores)}")
+        lines.append(f"Best miss distance (m):  {summarize(miss_best)}")
+        lines.append(f"Miss score:              {summarize(miss_scores)}")
     else:
-        lines.append("Miss best lateral (m):     no floor/timeout misses with lateral data")
+        lines.append("Best miss distance (m): no floor/timeout misses with data")
 
     if all_best:
-        lines.append(f"All episodes best lateral: {summarize(all_best)}")
+        lines.append(f"All episodes best miss:  {summarize(all_best)}")
 
     return "\n".join(lines), report_data
 
@@ -215,7 +215,7 @@ def write_episodes_csv(path: str, episodes: list[dict]) -> None:
         "episode_length",
         "return",
         "impact_lateral_m",
-        "best_lateral_m",
+        "best_miss_m",
         "hit_score",
         "miss_score",
     ]
