@@ -1,0 +1,6 @@
+mujoco>=3.0.0
+numpy>=1.24.0
+torch>=2.0.0
+gymnasium>=0.29.0
+rsl-rl-lib>=5.0.0
+tensordict>=0.10.0
