@@ -1,4 +1,4 @@
-mujoco>=3.0.0
+mujoco>=3.0.0,<=3.3.7  # 3.5.0+ dropped Python 3.9 wheels
 numpy>=1.24.0
 torch>=2.0.0
 gymnasium>=0.29.0

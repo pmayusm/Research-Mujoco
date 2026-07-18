@@ -53,24 +53,17 @@
             solver="PGS"/>
 
     <worldbody>
-<<<<<<< HEAD
         <geom name="floor" type="plane" size="10 10 0.1" rgba=".9 0 0 1 " pos ="0 0 1"/>
         <body name="platform_body" pos="2 5 5">
             <geom name="random_platform" type="box" size="0.4 0.4 0.05" rgba="0.2 0.6 0.2 1" condim="3"/>
         </body>
         <!-- Yaw rotates around the turret center, not the hood mesh origin at the back. -->
         <body name="yaw_pivot" pos="0.138 1.348 2.292">
-=======
-        <body name="launcher_middle_hood" pos="0 0 0.5">
->>>>>>> 29c09aa10ae4094d9548d2ae41260f19acaa359c
             <joint name="yaw joint"
                 type="hinge"
                 axis="0 0 1"
                 damping="0.005"/>
-<<<<<<< HEAD
             <body name="launcher_middle_hood" pos="-0.138 -1.348 -1.792">
-=======
->>>>>>> 29c09aa10ae4094d9548d2ae41260f19acaa359c
             <geom type="mesh" mesh="hood_p0" rgba="0.2 0.6 0.8 1" condim="3" />
             <geom type="mesh" mesh="hood_p1" rgba="0.2 0.6 0.8 1" condim="3" />
             <geom type="mesh" mesh="hood_p2" rgba="0.2 0.6 0.8 1" condim="3" />
@@ -112,11 +105,8 @@
             <geom type="mesh" mesh="hood_p38" rgba="0.2 0.6 0.8 1" condim="3" />
             <geom type="mesh" mesh="hood_p39" rgba="0.2 0.6 0.8 1" condim="3" />
 
-<<<<<<< HEAD
             <site name="shooter_spawn" pos="0.1 1.2 1.65" size="0.04" rgba="0 1 0 0.4"/>
 
-=======
->>>>>>> 29c09aa10ae4094d9548d2ae41260f19acaa359c
             <!-- Flywheel -->
             <body name="flywheel" pos="0.45 2.1 1.35" euler="0 0 -15">
                 <joint name="flywheel_joint"
@@ -131,21 +121,14 @@
                     euler="0 90 0"
                     rgba="0 0 1 1"/>
             </body>
-<<<<<<< HEAD
             </body>
-=======
->>>>>>> 29c09aa10ae4094d9548d2ae41260f19acaa359c
         </body>
 
         <light diffuse="5 5 5" pos="0 0 0.05" dir="0 0 -1"/>
 		<!-- <geom type="plane" size="0.1 0.1 0.01" rgba=".9 0 0 1"/> -->
 
 
-<<<<<<< HEAD
         <body name="ball" pos="0 0 -10">
-=======
-        <body name="ball" pos="0.1 1.2 2">
->>>>>>> 29c09aa10ae4094d9548d2ae41260f19acaa359c
             <freejoint/>
 
             <geom type="sphere"
@@ -161,7 +144,6 @@
     <actuator>
         <motor name="flywheel_motor" joint="flywheel_joint"
             gear="2000"
-<<<<<<< HEAD
             ctrlrange="-1 1"/>
          <motor name="yaw_motor" joint="yaw joint"
             gear="200"
@@ -169,12 +151,6 @@
         <general name="ball_spawn" site="shooter_spawn"
             ctrllimited="true" ctrlrange="0 1"
             dyntype="none" gaintype="fixed" gainprm="0" biastype="none"/>
-=======
-            ctrlrange="-1 1"/>
-         <motor name="yaw_motor" joint="yaw joint"
-            gear="200"
-            ctrlrange="-1 1"/>
->>>>>>> 29c09aa10ae4094d9548d2ae41260f19acaa359c
     </actuator>
 
 </mujoco>
