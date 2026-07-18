@@ -15,7 +15,6 @@ model = mujoco.MjModel.from_xml_path("flywheel_test.xml")
 data = mujoco.MjData(model)
 
 
-<<<<<<< HEAD
 
 actuator_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "flywheel_motor")
 yaw_motor_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "yaw_motor")
@@ -153,10 +152,6 @@ mujoco.mj_forward(model, data)
 data.ctrl[actuator_id] = -1
 data.ctrl[yaw_motor_id] = 0
 data.ctrl[spawn_ctrl_id] = 0
-=======
-actuator_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "flywheel_motor")
-yaw_motor_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, "yaw_motor")
->>>>>>> 29c09aa10ae4094d9548d2ae41260f19acaa359c
 
 with mujoco.viewer.launch_passive(model, data) as viewer:
     print("Simulation started. Press Ctrl+C in the terminal to exit.")
@@ -164,9 +159,13 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
     while viewer.is_running():
         step_start = time.time()
 
-<<<<<<< HEAD
         viewer.sync()
 
+        # Apply base motor controls every step -- keeps actuator and yaw motor off, spawn control floats
+        data.ctrl[actuator_id] = -1
+        data.ctrl[yaw_motor_id] = 0
+
+        # Handle spawning logic
         spawn_ctrl = data.ctrl[spawn_ctrl_id]
         if spawn_ctrl > 0.5 and prev_spawn_ctrl <= 0.5:
             spawn_ball_in_shooter()
@@ -205,11 +204,6 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
                 print(f"Episode Finished. {episode_message} Total Reward: {final_reward:.3f}", end="\r")
 
             pre_step_ball_pos = ball_pos.copy()
-=======
-        
-        data.ctrl[actuator_id] = -1
-        data.ctrl[yaw_motor_id] = 0
->>>>>>> 29c09aa10ae4094d9548d2ae41260f19acaa359c
 
         mujoco.mj_step(model, data)
 
