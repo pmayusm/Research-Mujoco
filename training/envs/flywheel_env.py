@@ -37,6 +37,7 @@ class EnvHandles:
     ball_geom_id: int
     target_geom_id: int
     target_half_thickness: float
+    target_lateral_half_extent: float
     ball_radius: float
     floor_z: float
     ball_qpos_adr: int
@@ -103,6 +104,7 @@ class FlywheelVecEnv(VecEnv):
             ball_geom_id=ball_geom_id,
             target_geom_id=target_geom_id,
             target_half_thickness=float(model.geom_size[target_geom_id][2]),
+            target_lateral_half_extent=float(np.linalg.norm(model.geom_size[target_geom_id][:2])),
             ball_radius=float(model.geom_size[ball_geom_id][0]),
             floor_z=float(model.geom_pos[floor_geom_id][2]),
             ball_qpos_adr=int(model.jnt_qposadr[ball_joint_id]),
@@ -248,9 +250,9 @@ class FlywheelVecEnv(VecEnv):
         slab_pos = handles.data.xpos[handles.body_id].copy()
         plane_normal = handles.data.xmat[handles.body_id].reshape(3, 3)[:, 2]
         signed_distance = np.dot(ball_pos - slab_pos, plane_normal)
-        hit_front_face = signed_distance <= handles.target_half_thickness + handles.ball_radius
+        crossed_front_face_plane = signed_distance <= handles.target_half_thickness + handles.ball_radius
 
-        if self._ball_contacts_target(handles) or hit_front_face:
+        if self._ball_contacts_target(handles):
             impact_distance = impact_distance_on_face(
                 self.pre_step_ball_pos[env_id],
                 slab_pos,
@@ -258,6 +260,22 @@ class FlywheelVecEnv(VecEnv):
                 handles.target_half_thickness,
             )
             return compute_hit_score(impact_distance), True, "hit", impact_distance
+
+        if crossed_front_face_plane:
+            # The plane extends infinitely, so only treat this as a hit if the
+            # ball actually crossed within the target's footprint (not just
+            # anywhere along the same depth). This also catches high-speed
+            # tunneling through the thin target that mujoco's contact solver
+            # might miss in a single step.
+            impact_distance = impact_distance_on_face(
+                self.pre_step_ball_pos[env_id],
+                slab_pos,
+                plane_normal,
+                handles.target_half_thickness,
+            )
+            hit_radius = handles.target_lateral_half_extent + handles.ball_radius
+            if impact_distance <= hit_radius:
+                return compute_hit_score(impact_distance), True, "hit", impact_distance
 
         if ball_pos[2] <= handles.floor_z + handles.ball_radius:
             return compute_miss_score(self.best_lateral[env_id]), True, "floor", None
