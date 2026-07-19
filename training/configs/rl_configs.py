@@ -4,6 +4,10 @@ GAUSSIAN_DISTRIBUTION = {
     "class_name": "GaussianDistribution",
     "init_std": 1.0,
     "std_type": "scalar",
+    # Actions are clipped to [-1, 1], so std has no business growing much past that
+    # range. Without this cap, the entropy bonus can outweigh our (currently small)
+    # task reward and drive std unbounded -- turning the "policy" into clipped noise.
+    "std_range": (0.05, 1.5),
 }
 
 MLP_ACTOR = {
@@ -54,9 +58,13 @@ def teacher_ppo_cfg() -> dict:
             "learning_rate": 3e-4,
             "num_learning_epochs": 5,
             "num_mini_batches": 4,
-            "schedule": "adaptive",
+            # "adaptive" ramps the LR up to 10x whenever KL stays low, which can snowball
+            # into a destabilizing update once the policy is fairly confident -- that's the
+            # likely cause of the sudden, sustained policy collapse we saw mid-training.
+            # A fixed LR is slower but far more predictable for this low-reward-magnitude task.
+            "schedule": "fixed",
             "desired_kl": 0.01,
-            "entropy_coef": 0.01,
+            "entropy_coef": 0.002,
             "gamma": 0.99,
             "lam": 0.95,
             "value_loss_coef": 1.0,

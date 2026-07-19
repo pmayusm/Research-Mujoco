@@ -4,14 +4,38 @@ REWARD_ZERO_DISTANCE = 6.0
 HIT_SCORE_MAX = 5.0
 MISS_SCORE_MAX = 1.0
 DENSE_REWARD_SCALE = 0.1
+DENSE_CLOSENESS_SCALE = 5.0
+# Extra penalty (on top of the usual miss score) for ending an episode by dropping
+# the ball on the floor. Without this, floor and timeout score identically whenever
+# the ball never got close, so a cheap "drop it immediately" strategy is just as
+# good as actually flying toward the target -- and it's much faster to learn, so
+# PPO converges there first. This makes floor strictly worse than flying the full
+# distance with the same accuracy.
+FLOOR_PENALTY = 0.2
 
 
 def compute_target_reward(lateral_distance):
-    """Return accuracy in [0, 1]. Zero beyond 6 m, increasing toward the bullseye."""
+    """Return accuracy in [0, 1]. Zero beyond 6 m, increasing toward the bullseye.
+
+    Used for the *official* hit/miss scores only. This has a hard cutoff by
+    design, so it must not be used for per-step training shaping -- if most
+    episodes never get within 6 m, every step of those episodes would score
+    an identical 0.0 and PPO would get no gradient to learn from at all.
+    """
     if lateral_distance >= REWARD_ZERO_DISTANCE:
         return 0.0
     progress = 1.0 - (lateral_distance / REWARD_ZERO_DISTANCE)
     return progress ** 2
+
+
+def compute_dense_closeness(distance):
+    """Smooth, uncapped closeness in (0, 1] for per-step training shaping.
+
+    Unlike compute_target_reward, this has no hard cutoff: it keeps providing
+    a (small but nonzero) gradient at any distance, so episodes that never
+    reach the 6 m scoring radius still give PPO something to learn from.
+    """
+    return DENSE_CLOSENESS_SCALE / (DENSE_CLOSENESS_SCALE + max(0.0, distance))
 
 
 def compute_hit_score(impact_lateral):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections import deque
 from dataclasses import dataclass
 
 import mujoco
@@ -12,10 +13,11 @@ from tensordict import TensorDict
 
 from flywheel_rewards import (
     DENSE_REWARD_SCALE,
+    FLOOR_PENALTY,
     compute_closeness,
+    compute_dense_closeness,
     compute_hit_score,
     compute_miss_score,
-    compute_target_reward,
     impact_distance_on_face,
 )
 from rsl_rl.env import VecEnv
@@ -23,6 +25,12 @@ from rsl_rl.env import VecEnv
 HIDDEN_BALL_POS = np.array([0.0, 0.0, -10.0], dtype=np.float64)
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 MODEL_PATH = os.path.join(PROJECT_ROOT, "flywheel_test.xml")
+
+# Full (hardest) target randomization envelope. Curriculum scale interpolates
+# from a small, easy envelope centered near the shooter up to this full range.
+TARGET_XY_RANGE = 10.0
+TARGET_Z_MIN = 2.0
+TARGET_Z_RANGE = 8.0
 
 
 @dataclass
@@ -60,11 +68,30 @@ class FlywheelVecEnv(VecEnv):
         device: str = "cpu",
         max_episode_length: int = 600,
         seed: int | None = 0,
+        episode_logger=None,
+        curriculum_enabled: bool = False,
+        curriculum_start_scale: float = 0.3,
+        curriculum_max_scale: float = 1.0,
+        curriculum_step: float = 0.05,
+        curriculum_window: int = 200,
+        curriculum_hit_threshold: float = 0.15,
     ) -> None:
         self.num_envs = num_envs
         self.num_actions = 2
         self.device = device
         self.max_episode_length = max_episode_length
+        self.episode_logger = episode_logger
+
+        # Curriculum learning: start targets close/easy and widen the randomization
+        # envelope once the policy is actually hitting often enough, rather than
+        # forcing it to solve full-range precision aiming from episode 1. Disabled
+        # by default so eval/distillation always see the full (hardest) envelope.
+        self.curriculum_enabled = curriculum_enabled
+        self.curriculum_scale = curriculum_start_scale if curriculum_enabled else curriculum_max_scale
+        self.curriculum_max_scale = curriculum_max_scale
+        self.curriculum_step = curriculum_step
+        self.curriculum_hit_threshold = curriculum_hit_threshold
+        self._curriculum_outcomes: deque[float] = deque(maxlen=curriculum_window)
 
         self.rng = np.random.default_rng(seed)
         self.handles = [self._make_handles() for _ in range(num_envs)]
@@ -155,26 +182,50 @@ class FlywheelVecEnv(VecEnv):
                     dones[env_id] = True
                     extras.setdefault("episode", {})
                     extras["log"][f"/episode/outcome_{outcome}"] = 1.0
+                    episode_length = int(self.episode_length_buf[env_id].item())
+                    best_miss = self._finite_best_miss(env_id)
                     self._record_episode_done(
                         extras,
                         env_id,
                         outcome,
                         impact_lateral=impact_lateral,
-                        best_miss=self._finite_best_miss(env_id),
-                        episode_length=int(self.episode_length_buf[env_id].item()),
+                        best_miss=best_miss,
+                        episode_length=episode_length,
                     )
+                    if self.episode_logger is not None:
+                        self.episode_logger.record(
+                            env_id,
+                            outcome,
+                            episode_length,
+                            impact_lateral,
+                            best_miss,
+                            curriculum_scale=self.curriculum_scale,
+                        )
+                    self._update_curriculum(outcome == "hit")
 
             if self.episode_length_buf[env_id].item() >= self.max_episode_length and not dones[env_id]:
                 rewards[env_id] += compute_miss_score(self.best_miss[env_id])
                 dones[env_id] = True
                 extras["log"]["/episode/timeout"] = 1.0
+                episode_length = int(self.episode_length_buf[env_id].item())
+                best_miss = self._finite_best_miss(env_id)
                 self._record_episode_done(
                     extras,
                     env_id,
                     "timeout",
-                    best_miss=self._finite_best_miss(env_id),
-                    episode_length=int(self.episode_length_buf[env_id].item()),
+                    best_miss=best_miss,
+                    episode_length=episode_length,
                 )
+                if self.episode_logger is not None:
+                    self.episode_logger.record(
+                        env_id,
+                        "timeout",
+                        episode_length,
+                        None,
+                        best_miss,
+                        curriculum_scale=self.curriculum_scale,
+                    )
+                self._update_curriculum(False)
 
             if dones[env_id]:
                 self._reset_env(env_id)
@@ -182,7 +233,21 @@ class FlywheelVecEnv(VecEnv):
         obs = self._build_obs()
         reward_t = torch.as_tensor(rewards, dtype=torch.float32, device=self.device)
         done_t = torch.as_tensor(dones, dtype=torch.bool, device=self.device)
+        extras["log"]["/curriculum/scale"] = self.curriculum_scale
         return obs, reward_t, done_t, extras
+
+    def _update_curriculum(self, is_hit: bool) -> None:
+        if not self.curriculum_enabled or self.curriculum_scale >= self.curriculum_max_scale:
+            return
+        self._curriculum_outcomes.append(1.0 if is_hit else 0.0)
+        if len(self._curriculum_outcomes) < self._curriculum_outcomes.maxlen:
+            return
+        hit_rate = sum(self._curriculum_outcomes) / len(self._curriculum_outcomes)
+        if hit_rate >= self.curriculum_hit_threshold:
+            self.curriculum_scale = min(self.curriculum_max_scale, self.curriculum_scale + self.curriculum_step)
+            # Reset the window so we judge the *new* difficulty level fresh, instead
+            # of immediately ratcheting again on stale (easier-level) data.
+            self._curriculum_outcomes.clear()
 
     def _reset_all(self) -> None:
         for env_id in range(self.num_envs):
@@ -190,9 +255,19 @@ class FlywheelVecEnv(VecEnv):
 
     def _reset_env(self, env_id: int) -> None:
         handles = self.handles[env_id]
-        random_x = self.rng.uniform(-10.0, 10.0)
-        random_y = self.rng.uniform(-10.0, 10.0)
-        random_z = self.rng.uniform(2.0, 10.0)
+        scale = self.curriculum_scale
+        # Anchoring z at the *closest/lowest* corner made "easy" mode mean close, low
+        # targets -- which need a flat, floor-skimming shot and turned out to be *more*
+        # prone to clipping the floor than a farther/higher target's arcing shot, not
+        # less. Centering on the middle of the full range and expanding symmetrically
+        # avoids starting the curriculum at that physically awkward extreme.
+        target_z_center = TARGET_Z_MIN + TARGET_Z_RANGE / 2.0
+        random_x = self.rng.uniform(-TARGET_XY_RANGE * scale, TARGET_XY_RANGE * scale)
+        random_y = self.rng.uniform(-TARGET_XY_RANGE * scale, TARGET_XY_RANGE * scale)
+        random_z = self.rng.uniform(
+            target_z_center - (TARGET_Z_RANGE / 2.0) * scale,
+            target_z_center + (TARGET_Z_RANGE / 2.0) * scale,
+        )
         target_pos = np.array([random_x, random_y, random_z], dtype=np.float64)
 
         handles.model.body_pos[handles.body_id] = target_pos
@@ -245,9 +320,12 @@ class FlywheelVecEnv(VecEnv):
         )
 
         self.best_miss[env_id] = min(self.best_miss[env_id], miss_distance)
-        accuracy = compute_target_reward(miss_distance)
-        progress = max(0.0, accuracy - self.prev_accuracy[env_id])
-        self.prev_accuracy[env_id] = accuracy
+        # compute_dense_closeness (not compute_target_reward) on purpose: it has no
+        # hard cutoff, so episodes that never reach the 6m scoring radius still give
+        # PPO a nonzero gradient toward getting closer.
+        closeness = compute_dense_closeness(miss_distance)
+        progress = max(0.0, closeness - self.prev_accuracy[env_id])
+        self.prev_accuracy[env_id] = closeness
         return DENSE_REWARD_SCALE * progress
 
     def _terminal_step(
@@ -285,7 +363,8 @@ class FlywheelVecEnv(VecEnv):
                 return compute_hit_score(impact_distance), True, "hit", impact_distance
 
         if ball_pos[2] <= handles.floor_z + handles.ball_radius:
-            return compute_miss_score(self.best_miss[env_id]), True, "floor", None
+            floor_reward = compute_miss_score(self.best_miss[env_id]) - FLOOR_PENALTY
+            return floor_reward, True, "floor", None
 
         return 0.0, False, "running", None
 
