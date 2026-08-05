@@ -2,12 +2,17 @@
 
 GAUSSIAN_DISTRIBUTION = {
     "class_name": "GaussianDistribution",
-    "init_std": 1.0,
+    # Was 1.0: with actions clipped to [-1, 1], std=1 makes every sample nearly
+    # uniform over the full control range, so the policy never settles into a
+    # precise launch. The gear-fix run kept Mean action std pinned at 1.00 for
+    # the entire 30k iterations. Starting lower gives exploration room without
+    # drowning the mean action in noise.
+    "init_std": 0.5,
     "std_type": "scalar",
-    # Actions are clipped to [-1, 1], so std has no business growing much past that
-    # range. Without this cap, the entropy bonus can outweigh our (currently small)
-    # task reward and drive std unbounded -- turning the "policy" into clipped noise.
-    "std_range": (0.05, 1.5),
+    # Soft floor at 0.32: v8 raised this to 0.40 with entropy 0.001 and shook apart
+    # a good mean (hit ~10% -> ~5%, late floor spikes). Too low (0.30) traps after
+    # under-launch cascades; too high destroys precise launch. 0.32 is the middle.
+    "std_range": (0.32, 1.0),
 }
 
 MLP_ACTOR = {
@@ -55,8 +60,42 @@ def teacher_ppo_cfg() -> dict:
         "algorithm": {
             "class_name": "PPO",
             "optimizer": "adam",
-            "learning_rate": 3e-4,
-            "num_learning_epochs": 5,
+            # Dropped from 3e-4 -> 1e-4: with schedule="fixed", rsl_rl's PPO completely
+            # ignores desired_kl (it's only read under "adaptive"), so there is *no*
+            # mechanism to correct an update once it starts drifting large. During a
+            # resumed run, surrogate loss climbed steadily from ~0.02 to a sustained
+            # 0.15-0.35 over ~9k iterations (clip_param is 0.2, so this is well above
+            # a healthy, well-clipped update) with nothing to rein it in, and the
+            # policy eventually collapsed to 100% floor-drops. A smaller fixed LR keeps
+            # each update small enough that this kind of unchecked drift is much less
+            # likely, especially once std has already dropped low (0.5ish) and the
+            # policy is more sensitive to same-sized absolute steps.
+            #
+            # Follow-up #1: after the divergence was fixed, a 100k-iteration run held
+            # perfectly stable (surrogate loss stayed near 0) but hit rate was flat at
+            # ~5% for the entire run -- no upward trend in any of 10 equal-sized
+            # segments. Looked like the LR was too conservative to keep progressing.
+            #
+            # Follow-up #2: it wasn't actually 1e-4. rsl_rl's PPO.load() restores the
+            # *optimizer's* saved state dict on resume, which includes the LR the
+            # checkpoint was saved with -- silently overriding this config value. That
+            # 100k-iteration "1e-4" run, and every resumed run since the value was first
+            # dropped from 3e-4, was actually still training at 3e-4 the whole time; the
+            # edit here never took effect. (train_teacher.py now explicitly re-applies
+            # this config's LR to the optimizer after a resume, so it finally does.)
+            # Dropped 3e-4 -> 1e-4 after the gear=1000 run: with std pinned at its
+            # floor and schedule="fixed", a late surrogate-loss spike (0.12 then
+            # 0.29, above clip_param=0.2) had nothing to rein it in and collapsed a
+            # healthy ~6%-hit policy to 100% floor-drops around iter 21k. Smaller
+            # fixed steps keep updates inside the trust region when the policy is
+            # already sharp.
+            # Dropped 1e-4 -> 5e-5 after v8: larger updates + high exploration
+            # eroded the good model_202999 mean (hit ~10% -> ~5%). Gentler fixed
+            # steps protect a sharp launch policy while still allowing slow progress.
+            "learning_rate": 5e-5,
+            # Cut 5 -> 3: fewer passes per rollout reduce how hard one bad batch
+            # can overwrite a stable launch mean.
+            "num_learning_epochs": 3,
             "num_mini_batches": 4,
             # "adaptive" ramps the LR up to 10x whenever KL stays low, which can snowball
             # into a destabilizing update once the policy is fairly confident -- that's the
@@ -64,7 +103,9 @@ def teacher_ppo_cfg() -> dict:
             # A fixed LR is slower but far more predictable for this low-reward-magnitude task.
             "schedule": "fixed",
             "desired_kl": 0.01,
-            "entropy_coef": 0.002,
+            # Reverted 0.001 -> 0.0005 with std floor 0.32: the higher entropy package
+            # (v8) avoided 99% floor locks most of the run but still destroyed precision.
+            "entropy_coef": 0.0005,
             "gamma": 0.99,
             "lam": 0.95,
             "value_loss_coef": 1.0,

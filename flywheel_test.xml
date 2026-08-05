@@ -142,8 +142,25 @@
     </worldbody>
 
     <actuator>
+        <!-- Was gear=2000: the ball never cleanly separates from the flywheel after
+             contact (its hinge damping is tiny and the ball keeps re-contacting the
+             spinning surface), so it gets continuously re-accelerated for as long as
+             contact holds, rather than a single bounded launch impulse. At gear=2000,
+             a held command (e.g. a saturated policy output) built up to 60-100+ m/s
+             vertical speed over a few hundred steps -- needing 10-20+ seconds of flight
+             just to come back down, far beyond any reasonable episode length, and far
+             faster than needed to reach targets only a few meters away.
+             gear=400 was still too weak in real episode rollouts: open-loop hold at
+             full power only reached max_z ~3.3m, while curriculum scale 0.3 already
+             places targets in Z=[4.8, 7.2], so every episode was physically
+             unwinnable and the policy rationally collapsed to floor-drops.
+             gear=1000 is the new compromise: open-loop + crude yaw aiming gets
+             mean_max_z ~6.2m (covers the easy curriculum band) and a few % hits
+             without a learned policy, while still well below the old gear=2000
+             "launch into orbit" regime.
+        -->
         <motor name="flywheel_motor" joint="flywheel_joint"
-            gear="2000"
+            gear="1000"
             ctrlrange="-1 1"/>
          <motor name="yaw_motor" joint="yaw joint"
             gear="200"

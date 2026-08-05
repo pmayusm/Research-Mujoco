@@ -22,7 +22,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from flywheel_rewards import compute_closeness
+from flywheel_rewards import compute_target_distances
 from training.configs.rl_configs import teacher_ppo_cfg
 from training.envs.flywheel_env import FlywheelVecEnv
 from rsl_rl.runners import OnPolicyRunner
@@ -38,10 +38,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--num-envs", type=int, default=1)
     parser.add_argument("--num-episodes", type=int, default=5)
+    parser.add_argument("--max-episode-length", type=int, default=3000)
     parser.add_argument("--max-steps", type=int, default=20000, help="Safety cap on total steps logged")
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--stochastic", action="store_true", help="Sample actions instead of using the mean")
+    parser.add_argument(
+        "--curriculum-scale",
+        type=float,
+        default=None,
+        help=(
+            "Pin the target-randomization envelope to this curriculum scale (0-1) instead "
+            "of the default full/hardest range -- use the scale the checkpoint was actually "
+            "trained at to see representative trajectories rather than harder-than-trained ones."
+        ),
+    )
     parser.add_argument(
         "--output-dir",
         type=str,
@@ -95,7 +106,7 @@ def collect_trajectory(
                 ball_pos = handles.data.xpos[handles.ball_id].copy()
                 target_pos = handles.data.xpos[handles.body_id].copy()
                 plane_normal = handles.data.xmat[handles.body_id].reshape(3, 3)[:, 2]
-                miss_distance, lateral_distance, face_distance = compute_closeness(
+                miss_distance, lateral_distance, face_distance = compute_target_distances(
                     ball_pos, target_pos, plane_normal, handles.target_half_thickness
                 )
                 rows.append(
@@ -217,7 +228,20 @@ def main() -> None:
         print("CUDA unavailable, falling back to CPU.")
         device = "cpu"
 
-    env = FlywheelVecEnv(num_envs=args.num_envs, device=device, seed=args.seed)
+    env_kwargs = {}
+    if args.curriculum_scale is not None:
+        env_kwargs = {
+            "curriculum_enabled": True,
+            "curriculum_start_scale": args.curriculum_scale,
+            "curriculum_max_scale": args.curriculum_scale,
+        }
+    env = FlywheelVecEnv(
+        num_envs=args.num_envs,
+        device=device,
+        seed=args.seed,
+        max_episode_length=args.max_episode_length,
+        **env_kwargs,
+    )
     policy = build_policy(args.checkpoint, env, device)
 
     print(f"Logging trajectory: {'policy=' + args.checkpoint if policy else 'no-op actions (zero control)'}")

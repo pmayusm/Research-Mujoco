@@ -5,9 +5,10 @@ import random
 import numpy as np
 
 from flywheel_rewards import (
-    compute_closeness,
-    compute_hit_score,
-    compute_miss_score,
+    FLOOR_PENALTY,
+    HIT_BONUS,
+    closeness,
+    compute_target_distances,
     impact_distance_on_face,
 )
 
@@ -179,7 +180,7 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
             slab_pos = np.array(data.xpos[body_id])
             slab_matrix = data.xmat[body_id].reshape(3, 3)
             plane_normal = slab_matrix[:, 2]
-            miss_distance, lateral_distance, _ = compute_closeness(
+            miss_distance, lateral_distance, _ = compute_target_distances(
                 ball_pos, slab_pos, plane_normal, target_half_thickness
             )
 
@@ -191,13 +192,12 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
                     best_miss_distance = min(best_miss_distance, miss_distance)
                     best_lateral_distance = min(best_lateral_distance, lateral_distance)
 
-                miss_score = compute_miss_score(best_lateral_distance)
-                hit_potential = compute_hit_score(lateral_distance)
+                current_closeness = closeness(miss_distance)
 
             if not episode_finished:
                 print(
-                    f"Aim: {lateral_distance:.2f}m | Best aim: {best_lateral_distance:.2f}m | "
-                    f"Miss score: {miss_score:.3f} | Hit if now: {hit_potential:.3f}",
+                    f"Aim: {lateral_distance:.2f}m | Best miss: {best_miss_distance:.2f}m | "
+                    f"Closeness now: {current_closeness:.3f}",
                     end="\r",
                 )
             else:
@@ -220,12 +220,12 @@ with mujoco.viewer.launch_passive(model, data) as viewer:
                 )
                 finish_episode(
                     f"[IMPACT] Ball hit the target! Distance to center: {impact_distance:.2f} m",
-                    compute_hit_score(impact_distance),
+                    HIT_BONUS,
                 )
             elif ball_pos[2] <= floor_z + ball_radius:
                 finish_episode(
                     "[MISS] Ball hit the floor.",
-                    compute_miss_score(best_lateral_distance),
+                    -FLOOR_PENALTY,
                 )
 
         time_until_next_step = model.opt.timestep - (time.time() - step_start)

@@ -12,12 +12,11 @@ import torch
 from tensordict import TensorDict
 
 from flywheel_rewards import (
-    DENSE_REWARD_SCALE,
     FLOOR_PENALTY,
-    compute_closeness,
-    compute_dense_closeness,
-    compute_hit_score,
-    compute_miss_score,
+    HIT_BONUS,
+    timeout_terminal_reward,
+    dense_distance_reward,
+    compute_target_distances,
     impact_distance_on_face,
 )
 from rsl_rl.env import VecEnv
@@ -31,6 +30,10 @@ MODEL_PATH = os.path.join(PROJECT_ROOT, "flywheel_test.xml")
 TARGET_XY_RANGE = 10.0
 TARGET_Z_MIN = 2.0
 TARGET_Z_RANGE = 8.0
+# Observation-only scale for distance features (not part of the reward). Kept at
+# the old 12m reference so obs magnitudes stay in a similar range after the
+# reward switched from linear to exp(-d).
+OBS_DISTANCE_SCALE = 12.0
 
 
 @dataclass
@@ -66,7 +69,17 @@ class FlywheelVecEnv(VecEnv):
         self,
         num_envs: int = 16,
         device: str = "cpu",
-        max_episode_length: int = 600,
+        # 600 steps (1.8s at timestep=0.003) sounds generous, but it isn't: launch
+        # velocities observed from a trained policy run 25-38 m/s vertically, which
+        # needs ~5.1-7.9s just to arc back down to floor height (time_of_flight ~=
+        # (v + sqrt(v^2 + 2*g*(launch_h - floor_h))) / g). At 600 steps, ~85% of
+        # episodes were timing out mid-ascent -- the ball was simply still flying
+        # when the clock ran out, never getting a chance to actually land near (or
+        # far from) the target. That looks identical to a training/RL problem (flat
+        # hit-rate plateau, no matter how learning rate/entropy/etc. are tuned) but
+        # is really an episode-length/physics-budget mismatch. 3000 steps (9s) covers
+        # the worst case seen with margin.
+        max_episode_length: int = 3000,
         seed: int | None = 0,
         episode_logger=None,
         curriculum_enabled: bool = False,
@@ -103,8 +116,9 @@ class FlywheelVecEnv(VecEnv):
         # plane, unlike pure lateral offset, which is ~0 at the muzzle by construction
         # (the target is always oriented to face the shooter spawn point) and would
         # otherwise saturate the reward on the very first post-spawn step.
+        # Tracked for diagnostics/logging only (episode CSVs, curriculum) -- no
+        # longer part of the reward calculation itself.
         self.best_miss = np.full(num_envs, np.inf, dtype=np.float64)
-        self.prev_accuracy = np.zeros(num_envs, dtype=np.float64)
         self.pre_step_ball_pos = np.zeros((num_envs, 3), dtype=np.float64)
 
         self._reset_all()
@@ -167,7 +181,6 @@ class FlywheelVecEnv(VecEnv):
             ):
                 self._spawn_ball(handles)
                 self.ball_spawned[env_id] = True
-                self.prev_accuracy[env_id] = 0.0
 
             if self.ball_spawned[env_id]:
                 rewards[env_id] += self._dense_reward(env_id, handles)
@@ -204,11 +217,13 @@ class FlywheelVecEnv(VecEnv):
                     self._update_curriculum(outcome == "hit")
 
             if self.episode_length_buf[env_id].item() >= self.max_episode_length and not dones[env_id]:
-                rewards[env_id] += compute_miss_score(self.best_miss[env_id])
+                # Pay miss-quality terminal so a long near-miss beats dumping on
+                # the floor for a short episode (see TIMEOUT_MISS_BONUS).
+                best_miss = self._finite_best_miss(env_id)
+                rewards[env_id] += timeout_terminal_reward(best_miss)
                 dones[env_id] = True
                 extras["log"]["/episode/timeout"] = 1.0
                 episode_length = int(self.episode_length_buf[env_id].item())
-                best_miss = self._finite_best_miss(env_id)
                 self._record_episode_done(
                     extras,
                     env_id,
@@ -283,7 +298,6 @@ class FlywheelVecEnv(VecEnv):
         self.episode_length_buf[env_id] = 0
         self.ball_spawned[env_id] = False
         self.best_miss[env_id] = np.inf
-        self.prev_accuracy[env_id] = 0.0
 
     def _apply_action(self, handles: EnvHandles, action: np.ndarray) -> None:
         handles.data.ctrl[handles.flywheel_actuator] = np.clip(action[0], -1.0, 1.0)
@@ -308,6 +322,7 @@ class FlywheelVecEnv(VecEnv):
         mujoco.mj_forward(handles.model, handles.data)
 
     def _dense_reward(self, env_id: int, handles: EnvHandles) -> float:
+        """Per-step reward from exponential clamped distance score."""
         ball_pos = handles.data.xpos[handles.ball_id].copy()
         slab_pos = handles.data.xpos[handles.body_id].copy()
         plane_normal = handles.data.xmat[handles.body_id].reshape(3, 3)[:, 2]
@@ -315,18 +330,12 @@ class FlywheelVecEnv(VecEnv):
         # tangential offset from the target's boresight, which is ~0 right at the
         # muzzle by construction and would saturate the reward immediately. miss_distance
         # also accounts for the remaining depth to the target until the ball passes it.
-        miss_distance, _, _ = compute_closeness(
+        miss_distance, _, _ = compute_target_distances(
             ball_pos, slab_pos, plane_normal, handles.target_half_thickness
         )
 
         self.best_miss[env_id] = min(self.best_miss[env_id], miss_distance)
-        # compute_dense_closeness (not compute_target_reward) on purpose: it has no
-        # hard cutoff, so episodes that never reach the 6m scoring radius still give
-        # PPO a nonzero gradient toward getting closer.
-        closeness = compute_dense_closeness(miss_distance)
-        progress = max(0.0, closeness - self.prev_accuracy[env_id])
-        self.prev_accuracy[env_id] = closeness
-        return DENSE_REWARD_SCALE * progress
+        return dense_distance_reward(miss_distance)
 
     def _terminal_step(
         self, env_id: int, handles: EnvHandles
@@ -338,13 +347,16 @@ class FlywheelVecEnv(VecEnv):
         crossed_front_face_plane = signed_distance <= handles.target_half_thickness + handles.ball_radius
 
         if self._ball_contacts_target(handles):
+            # Flat bonus -- a hit is a hit, regardless of precision. impact_distance
+            # is still returned for logging/diagnostics (e.g. episode CSVs), just not
+            # used to scale the reward.
             impact_distance = impact_distance_on_face(
                 self.pre_step_ball_pos[env_id],
                 slab_pos,
                 plane_normal,
                 handles.target_half_thickness,
             )
-            return compute_hit_score(impact_distance), True, "hit", impact_distance
+            return HIT_BONUS, True, "hit", impact_distance
 
         if crossed_front_face_plane:
             # The plane extends infinitely, so only treat this as a hit if the
@@ -360,11 +372,17 @@ class FlywheelVecEnv(VecEnv):
             )
             hit_radius = handles.target_lateral_half_extent + handles.ball_radius
             if impact_distance <= hit_radius:
-                return compute_hit_score(impact_distance), True, "hit", impact_distance
+                return HIT_BONUS, True, "hit", impact_distance
+            # Fly-by miss: end the episode here. Previously these kept running to
+            # max_episode_length (3000), so a ~34-step miss collected thousands of
+            # extra dense-reward steps and the policy learned to coast to timeout
+            # instead of aiming for hits.
+            return timeout_terminal_reward(impact_distance), True, "miss", impact_distance
 
         if ball_pos[2] <= handles.floor_z + handles.ball_radius:
-            floor_reward = compute_miss_score(self.best_miss[env_id]) - FLOOR_PENALTY
-            return floor_reward, True, "floor", None
+            # Flat penalty -- hitting the floor always costs the same, regardless
+            # of how close the ball got.
+            return -FLOOR_PENALTY, True, "floor", None
 
         return 0.0, False, "running", None
 
@@ -417,12 +435,24 @@ class FlywheelVecEnv(VecEnv):
             flywheel_joint = mujoco.mj_name2id(handles.model, mujoco.mjtObj.mjOBJ_JOINT, "flywheel_joint")
             yaw_joint = mujoco.mj_name2id(handles.model, mujoco.mjtObj.mjOBJ_JOINT, "yaw joint")
             flywheel_vel = handles.data.qvel[handles.model.jnt_dofadr[flywheel_joint]]
-            yaw_angle = handles.data.qpos[handles.model.jnt_qposadr[yaw_joint]]
+            # The yaw hinge has no travel limit, so its raw qpos is a *cumulative*
+            # rotation count, not a bounded angle -- it just keeps growing/shrinking
+            # forever as the motor spins. Left unwrapped, this feature is wildly
+            # non-stationary: over a long run it drifted to a running mean of ~-973pi
+            # radians (~487 turns), which silently poisoned the observation normalizer
+            # (fine while training continuously and adapting online, but catastrophic
+            # the moment a checkpoint is reloaded into a fresh env that legitimately
+            # starts near yaw=0 -- the policy saw a wildly out-of-distribution input
+            # and degenerated to dropping the ball immediately). Wrapping to (-pi, pi]
+            # here keeps the observation bounded and physically meaningful regardless
+            # of how many total turns the joint has made.
+            raw_yaw_angle = handles.data.qpos[handles.model.jnt_qposadr[yaw_joint]]
+            yaw_angle = ((raw_yaw_angle + np.pi) % (2 * np.pi)) - np.pi
 
             target_pos = handles.data.xpos[handles.body_id]
             target_local = hood_rot.T @ (target_pos - hood_pos)
             plane_normal = handles.data.xmat[handles.body_id].reshape(3, 3)[:, 2]
-            miss_distance, _, face_distance = compute_closeness(
+            miss_distance, _, face_distance = compute_target_distances(
                 ball_pos, target_pos, plane_normal, handles.target_half_thickness
             )
 
@@ -440,7 +470,7 @@ class FlywheelVecEnv(VecEnv):
                     ball_vel_local[0] / 20.0,
                     ball_vel_local[1] / 20.0,
                     ball_vel_local[2] / 20.0,
-                    best_miss / 6.0,
+                    best_miss / OBS_DISTANCE_SCALE,
                     float(self.ball_spawned[env_id]),
                 ],
                 dtype=np.float32,
@@ -450,7 +480,7 @@ class FlywheelVecEnv(VecEnv):
                     target_local[0] / 15.0,
                     target_local[1] / 15.0,
                     target_local[2] / 15.0,
-                    face_distance / 6.0,
+                    face_distance / OBS_DISTANCE_SCALE,
                 ],
                 dtype=np.float32,
             )

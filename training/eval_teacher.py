@@ -17,7 +17,7 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from flywheel_rewards import compute_hit_score, compute_miss_score
+from flywheel_rewards import FLOOR_PENALTY, HIT_BONUS, timeout_terminal_reward
 from training.configs.rl_configs import teacher_ppo_cfg
 from training.envs.flywheel_env import FlywheelVecEnv
 from rsl_rl.runners import OnPolicyRunner
@@ -28,9 +28,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--num-envs", type=int, default=16)
     parser.add_argument("--num-episodes", type=int, default=100)
+    parser.add_argument("--max-episode-length", type=int, default=3000)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--stochastic", action="store_true", help="Sample actions instead of using the mean")
+    parser.add_argument(
+        "--curriculum-scale",
+        type=float,
+        default=None,
+        help=(
+            "Pin the target-randomization envelope to this curriculum scale (0-1) instead "
+            "of the default full/hardest range -- use the scale the checkpoint was actually "
+            "trained at for a representative evaluation."
+        ),
+    )
     parser.add_argument(
         "--output-dir",
         type=str,
@@ -63,16 +74,29 @@ def stats(values: list[float]) -> dict[str, float | None]:
 def enrich_episode(record: dict, episode_id: int) -> dict:
     impact_lateral = record.get("impact_lateral")
     best_miss = record.get("best_miss")
+    outcome = record["outcome"]
+    # Terminal scores: hit -> HIT_BONUS, floor -> -FLOOR_PENALTY,
+    # miss/timeout -> miss-quality bonus from approach/impact distance.
+    if outcome == "floor":
+        miss_score = -FLOOR_PENALTY
+    elif outcome == "miss":
+        miss_score = timeout_terminal_reward(
+            impact_lateral if impact_lateral is not None else best_miss
+        )
+    elif outcome == "timeout":
+        miss_score = timeout_terminal_reward(best_miss)
+    else:
+        miss_score = None
     return {
         "episode_id": episode_id,
         "env_id": record["env_id"],
-        "outcome": record["outcome"],
+        "outcome": outcome,
         "episode_length": record.get("episode_length"),
         "return": record["return"],
         "impact_lateral_m": impact_lateral,
         "best_miss_m": best_miss,
-        "hit_score": compute_hit_score(impact_lateral) if impact_lateral is not None else None,
-        "miss_score": compute_miss_score(best_miss) if best_miss is not None else None,
+        "hit_score": HIT_BONUS if outcome == "hit" else None,
+        "miss_score": miss_score,
     }
 
 
@@ -92,7 +116,7 @@ def build_report(episodes: list[dict], checkpoint: str, num_envs: int, stochasti
     miss_best = [
         ep["best_miss_m"]
         for ep in episodes
-        if ep["outcome"] in {"floor", "timeout"} and ep["best_miss_m"] is not None
+        if ep["outcome"] in {"floor", "miss", "timeout"} and ep["best_miss_m"] is not None
     ]
     miss_scores = [ep["miss_score"] for ep in episodes if ep["miss_score"] is not None]
     all_best = [ep["best_miss_m"] for ep in episodes if ep["best_miss_m"] is not None]
@@ -102,8 +126,10 @@ def build_report(episodes: list[dict], checkpoint: str, num_envs: int, stochasti
         "num_episodes": total,
         "num_envs": num_envs,
         "stochastic": stochastic,
-        "outcomes": {name: outcomes[name] for name in ("hit", "floor", "timeout")},
-        "outcome_pct": {name: 100.0 * outcomes[name] / total for name in ("hit", "floor", "timeout")},
+        "outcomes": {name: outcomes[name] for name in ("hit", "floor", "miss", "timeout")},
+        "outcome_pct": {
+            name: 100.0 * outcomes[name] / total for name in ("hit", "floor", "miss", "timeout")
+        },
         "returns": stats(returns),
         "lengths": stats(lengths),
         "hit_impacts": stats(hit_impacts),
@@ -124,7 +150,7 @@ def build_report(episodes: list[dict], checkpoint: str, num_envs: int, stochasti
         "Episode Outcomes",
         "----------------",
     ]
-    for outcome in ("hit", "floor", "timeout"):
+    for outcome in ("hit", "floor", "miss", "timeout"):
         count = outcomes[outcome]
         pct = 100.0 * count / total
         lines.append(f"{outcome:>7}: {count:4d} ({pct:5.1f}%)")
@@ -167,8 +193,19 @@ def run_evaluation(
     device: str,
     seed: int,
     stochastic: bool,
+    curriculum_scale: float | None = None,
+    max_episode_length: int = 3000,
 ) -> list[dict]:
-    env = FlywheelVecEnv(num_envs=num_envs, device=device, seed=seed)
+    env_kwargs = {}
+    if curriculum_scale is not None:
+        env_kwargs = {
+            "curriculum_enabled": True,
+            "curriculum_start_scale": curriculum_scale,
+            "curriculum_max_scale": curriculum_scale,
+        }
+    env = FlywheelVecEnv(
+        num_envs=num_envs, device=device, seed=seed, max_episode_length=max_episode_length, **env_kwargs
+    )
     runner = OnPolicyRunner(
         env,
         teacher_ppo_cfg(),
@@ -260,6 +297,8 @@ def main() -> None:
         device=device,
         seed=args.seed,
         stochastic=args.stochastic,
+        curriculum_scale=args.curriculum_scale,
+        max_episode_length=args.max_episode_length,
     )
 
     summary_text, _ = build_report(

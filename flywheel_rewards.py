@@ -1,55 +1,86 @@
-"""Shared reward functions for flywheel simulation and RL training."""
+"""Shared reward functions for flywheel simulation and RL training.
 
-REWARD_ZERO_DISTANCE = 6.0
-HIT_SCORE_MAX = 5.0
-MISS_SCORE_MAX = 1.0
-DENSE_REWARD_SCALE = 0.1
-DENSE_CLOSENESS_SCALE = 5.0
-# Extra penalty (on top of the usual miss score) for ending an episode by dropping
-# the ball on the floor. Without this, floor and timeout score identically whenever
-# the ball never got close, so a cheap "drop it immediately" strategy is just as
-# good as actually flying toward the target -- and it's much faster to learn, so
-# PPO converges there first. This makes floor strictly worse than flying the full
-# distance with the same accuracy.
-FLOOR_PENALTY = 0.2
+Episode return is:
+  1. Dense distance reward every step after the ball spawns.
+  2. A flat bonus if the ball hits the target.
+  3. A flat penalty if the ball hits the floor.
+  4. On timeout: a miss-quality bonus from best approach distance (not zero).
+
+Dense score uses a softened exponential so mid-range misses still produce a
+usable gradient. Plain exp(-d) collapses to ~0 by d≈4-5m (typical early miss
+distances), which left only the floor penalty as a learning signal and the
+policy collapsed to 100% floor-drops within ~1000 episodes.
+"""
+
+from __future__ import annotations
+
+import math
+
+# Soft length scale (meters) inside exp(-d / L). L≈6 keeps mid-range misses
+# (~3-6m) clearly above near-zero so the dense term still shapes aiming.
+DISTANCE_LENGTH_SCALE = 6.0
+
+# Clamped band for the raw distance score (before per-step scaling).
+DENSE_REWARD_MIN = 0.0
+DENSE_REWARD_MAX = 1.0
+# Per-step multiplier. Cut 0.002 -> 0.001 after v6b: a ~2700-step coast at
+# typical miss (~4m, closeness≈0.5) was paying ~2.7 dense + timeout bonus ≈ hit,
+# so the policy preferred timeout-coasting over committing to hits.
+DENSE_REWARD_SCALE = 0.001
+HIT_BONUS = 8.0
+# Raised 5 -> 8: late resumes kept collapsing into floor-dumps because a short
+# floor episode was cheaper than a long near-miss flight. Floor must clearly
+# lose to any timeout/miss that got reasonably close.
+FLOOR_PENALTY = 8.0
+# Terminal bonus on timeout/miss = TIMEOUT_MISS_BONUS * closeness(distance).
+# Cut 1.5 -> 0.75: collapses were NOT the policy preferring floor (−8) over
+# coast (~+2) — floor is worse. The healthy mode was long coast/miss; when a
+# mean drift caused under-launches, exploration was already starved so it
+# trapped. Keeping miss early-stop, devaluing coast/miss, and raising std/entropy
+# (see rl_configs) is the anti-collapse package. Hit (+8) still clearly wins;
+# miss/timeout stay above floor for close approaches (~+0.4 at d≈4m).
+TIMEOUT_MISS_BONUS = 0.75
 
 
-def compute_target_reward(lateral_distance):
-    """Return accuracy in [0, 1]. Zero beyond 6 m, increasing toward the bullseye.
+def closeness(distance: float) -> float:
+    """Exponential distance score, clamped into [DENSE_REWARD_MIN, DENSE_REWARD_MAX].
 
-    Used for the *official* hit/miss scores only. This has a hard cutoff by
-    design, so it must not be used for per-step training shaping -- if most
-    episodes never get within 6 m, every step of those episodes would score
-    an identical 0.0 and PPO would get no gradient to learn from at all.
+    score = clamp(exp(-distance / DISTANCE_LENGTH_SCALE), min, max)
+
+    1.0 at d=0; falls toward 0 as distance grows. Far early flight pays near the
+    lower limit; reward rises toward the upper limit as the ball gets close.
     """
-    if lateral_distance >= REWARD_ZERO_DISTANCE:
+    raw = math.exp(-float(distance) / DISTANCE_LENGTH_SCALE)
+    if raw < DENSE_REWARD_MIN:
+        return DENSE_REWARD_MIN
+    if raw > DENSE_REWARD_MAX:
+        return DENSE_REWARD_MAX
+    return raw
+
+
+def dense_distance_reward(distance: float) -> float:
+    """Per-step dense reward from miss distance."""
+    return DENSE_REWARD_SCALE * closeness(distance)
+
+
+def timeout_terminal_reward(best_miss: float | None) -> float:
+    """Terminal reward for max-length episodes based on closest approach."""
+    if best_miss is None:
         return 0.0
-    progress = 1.0 - (lateral_distance / REWARD_ZERO_DISTANCE)
-    return progress ** 2
+    try:
+        miss = float(best_miss)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(miss):
+        return 0.0
+    return TIMEOUT_MISS_BONUS * closeness(miss)
 
 
-def compute_dense_closeness(distance):
-    """Smooth, uncapped closeness in (0, 1] for per-step training shaping.
+def compute_target_distances(ball_pos, slab_pos, plane_normal, target_half_thickness):
+    """Return (miss_distance, lateral_distance, face_distance) to the target.
 
-    Unlike compute_target_reward, this has no hard cutoff: it keeps providing
-    a (small but nonzero) gradient at any distance, so episodes that never
-    reach the 6 m scoring radius still give PPO something to learn from.
+    Geometry helper, not a reward formula.
     """
-    return DENSE_CLOSENESS_SCALE / (DENSE_CLOSENESS_SCALE + max(0.0, distance))
-
-
-def compute_hit_score(impact_lateral):
-    """Reward in [0, 5], based only on where the ball actually hits the face."""
-    return HIT_SCORE_MAX * compute_target_reward(impact_lateral)
-
-
-def compute_miss_score(best_lateral_distance):
-    """Reward in [0, 1], based on best aim during the flight."""
-    return MISS_SCORE_MAX * compute_target_reward(best_lateral_distance)
-
-
-def compute_closeness(ball_pos, slab_pos, plane_normal, target_half_thickness):
-    """Return miss distance, lateral distance, and face distance to the target."""
     front_face_center = slab_pos + target_half_thickness * plane_normal
     offset = ball_pos - front_face_center
     normal_component = offset @ plane_normal
@@ -66,7 +97,7 @@ def compute_closeness(ball_pos, slab_pos, plane_normal, target_half_thickness):
 
 
 def impact_distance_on_face(ball_pos, slab_pos, plane_normal, target_half_thickness):
-    """Lateral miss distance on the shooter-facing front face of the target box."""
+    """Lateral distance from center on the shooter-facing front face (logging only)."""
     front_face_center = slab_pos + target_half_thickness * plane_normal
     offset = ball_pos - front_face_center
     tangential = offset - (offset @ plane_normal) * plane_normal
