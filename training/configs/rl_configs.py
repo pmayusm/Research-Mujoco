@@ -9,10 +9,10 @@ GAUSSIAN_DISTRIBUTION = {
     # drowning the mean action in noise.
     "init_std": 0.5,
     "std_type": "scalar",
-    # Soft floor at 0.32: v8 raised this to 0.40 with entropy 0.001 and shook apart
-    # a good mean (hit ~10% -> ~5%, late floor spikes). Too low (0.30) traps after
-    # under-launch cascades; too high destroys precise launch. 0.32 is the middle.
-    "std_range": (0.32, 1.0),
+    # Soft floor at 0.25: overnight hit peak 14.6% with floor ~0% under std=0.35.
+    # Miss still ~74% — precision needs a tighter launch; floor is solved so we
+    # can drop exploration without reopening under-launch collapse.
+    "std_range": (0.25, 1.0),
 }
 
 MLP_ACTOR = {
@@ -53,6 +53,8 @@ def teacher_ppo_cfg() -> dict:
         "save_interval": 100,
         "check_for_nan": True,
         "logger": "tensorboard",
+        # Single main policy: "privileged" is just the target-position channels
+        # (not a separate student/teacher setup). Actor sees full state including target.
         "obs_groups": {
             "actor": ["policy", "privileged"],
             "critic": ["policy", "privileged"],
@@ -103,9 +105,9 @@ def teacher_ppo_cfg() -> dict:
             # A fixed LR is slower but far more predictable for this low-reward-magnitude task.
             "schedule": "fixed",
             "desired_kl": 0.01,
-            # Reverted 0.001 -> 0.0005 with std floor 0.32: the higher entropy package
-            # (v8) avoided 99% floor locks most of the run but still destroyed precision.
-            "entropy_coef": 0.0005,
+            # Cut 0.0008 -> 0.0003 with std floor 0.25: favor exploiting a sharp
+            # launch mean over keeping exploration open (floor already solved).
+            "entropy_coef": 0.0003,
             "gamma": 0.99,
             "lam": 0.95,
             "value_loss_coef": 1.0,

@@ -18,6 +18,7 @@ if PROJECT_ROOT not in sys.path:
 
 from training.configs.rl_configs import teacher_ppo_cfg
 from training.envs.flywheel_env import FlywheelVecEnv
+from training.envs.parallel_flywheel_env import ParallelFlywheelVecEnv
 from training.episode_logger import EpisodeTableLogger
 from rsl_rl.runners import OnPolicyRunner
 
@@ -64,13 +65,31 @@ class BestTrackingRunner(OnPolicyRunner):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train flywheel teacher policy with RSL-RL PPO")
-    parser.add_argument("--num-envs", type=int, default=16)
+    parser.add_argument(
+        "--num-envs",
+        type=int,
+        default=32,
+        help="Total parallel MuJoCo environments (split across --num-workers processes)",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=None,
+        help="Process workers for physics (default: min(num_envs, cpu_count-2)). "
+        "Use 1 with --no-parallel for the legacy in-process VecEnv.",
+    )
+    parser.add_argument(
+        "--parallel",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Step env chunks in subprocesses (real multi-core speedup for MuJoCo)",
+    )
     parser.add_argument("--max-iterations", type=int, default=500)
     parser.add_argument(
         "--max-episode-length",
         type=int,
-        default=3000,
-        help="Steps per episode before a forced timeout (see FlywheelVecEnv for why 3000, not 600)",
+        default=900,
+        help="Control steps per episode before timeout (900 * frame_skip=5 * dt=0.002 ≈ 9s)",
     )
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--seed", type=int, default=0)
@@ -104,8 +123,8 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=None,
         help="On resume, raise the policy action std to at least this value so "
-        "exploration can escape a floor-drop local optimum. Prefer ~0.35 with the "
-        "current std_range floor of 0.32 (0.45 was too aggressive in v8).",
+        "exploration can escape a floor-drop local optimum. Prefer ~0.30 with the "
+        "current std_range floor of 0.25.",
     )
     parser.add_argument(
         "--curriculum",
@@ -145,7 +164,7 @@ def main() -> None:
             plot_every=args.plot_every,
         )
 
-    env = FlywheelVecEnv(
+    env_kwargs = dict(
         num_envs=args.num_envs,
         device=device,
         seed=args.seed,
@@ -158,6 +177,12 @@ def main() -> None:
         curriculum_window=args.curriculum_window,
         curriculum_hit_threshold=args.curriculum_hit_threshold,
     )
+    if args.parallel and (args.num_workers is None or args.num_workers != 1):
+        env = ParallelFlywheelVecEnv(num_workers=args.num_workers, **env_kwargs)
+        print(f"Parallel MuJoCo: {args.num_envs} envs across {env.num_workers} workers {env._local_counts}")
+    else:
+        env = FlywheelVecEnv(**env_kwargs)
+        print(f"In-process MuJoCo: {args.num_envs} serial envs")
     train_cfg = teacher_ppo_cfg()
 
     runner = BestTrackingRunner(env, train_cfg, log_dir=log_dir, device=device, episode_logger=episode_logger)
@@ -222,7 +247,12 @@ def main() -> None:
     # init_at_random_ep_len=False when resuming: randomizing episode lengths is
     # meant to diversify the very first rollout of a fresh run, but here the
     # policy/value function are already trained, so start every env cleanly.
-    runner.learn(num_learning_iterations=args.max_iterations, init_at_random_ep_len=not args.resume)
+    try:
+        runner.learn(num_learning_iterations=args.max_iterations, init_at_random_ep_len=not args.resume)
+    finally:
+        close = getattr(env, "close", None)
+        if callable(close):
+            close()
     if episode_logger is not None:
         episode_logger.flush()
     print(f"Done. Final checkpoint: {log_dir}/model_{runner.current_learning_iteration}.pt")
@@ -231,4 +261,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
+    # Required on macOS for spawn-based MuJoCo workers.
+    import multiprocessing as mp
+
+    mp.set_start_method("spawn", force=True)
     main()

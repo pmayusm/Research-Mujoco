@@ -27,19 +27,40 @@ DENSE_REWARD_MAX = 1.0
 # typical miss (~4m, closeness≈0.5) was paying ~2.7 dense + timeout bonus ≈ hit,
 # so the policy preferred timeout-coasting over committing to hits.
 DENSE_REWARD_SCALE = 0.001
-HIT_BONUS = 8.0
-# Raised 5 -> 8: late resumes kept collapsing into floor-dumps because a short
-# floor episode was cheaper than a long near-miss flight. Floor must clearly
-# lose to any timeout/miss that got reasonably close.
+# Raised 16 -> 24: overnight run solved floor (~0-3%) but miss still ~74%.
+# Only training the main (privileged) policy now — push hit vs miss harder.
+HIT_BONUS = 24.0
+# Floor already rare under gear=1800/spawn=100 physics; keep strong enough that
+# under-launch cannot become cheaper than a miss again.
 FLOOR_PENALTY = 8.0
-# Terminal bonus on timeout/miss = TIMEOUT_MISS_BONUS * closeness(distance).
-# Cut 1.5 -> 0.75: collapses were NOT the policy preferring floor (−8) over
-# coast (~+2) — floor is worse. The healthy mode was long coast/miss; when a
-# mean drift caused under-launches, exploration was already starved so it
-# trapped. Keeping miss early-stop, devaluing coast/miss, and raising std/entropy
-# (see rl_configs) is the anti-collapse package. Hit (+8) still clearly wins;
-# miss/timeout stay above floor for close approaches (~+0.4 at d≈4m).
-TIMEOUT_MISS_BONUS = 0.75
+# Cut 0.35 -> 0.1: close miss ~+0.05, hit +24. Stops "good enough miss" plateau.
+TIMEOUT_MISS_BONUS = 0.1
+
+# Pre-spawn yaw alignment (diagnosis: ~80% of misses are off-boresight; hit rate
+# jumps to ~39% when |aim_err| < 15° at spawn). Dense reward while the ball is
+# still hidden teaches the policy to finish aiming before launch.
+# Angle scale ~15°: full credit near 0, ~e^-2 at 30°, near-zero by 60°+.
+AIM_ANGLE_SCALE_RAD = 0.26
+# Per control-step. 100 well-aimed spin-up steps ≈ +5, clearly worth learning
+# but still well below HIT_BONUS so the agent cannot farm aim forever.
+AIM_ALIGN_REWARD_SCALE = 0.05
+# Flat bonus at the spawn step if aim is already inside the gate band.
+AIM_SPAWN_BONUS = 2.0
+
+
+def aim_alignment_score(aim_error_rad: float) -> float:
+    """1 at perfect boresight, falls with |aim_error| / AIM_ANGLE_SCALE_RAD."""
+    return math.exp(-abs(float(aim_error_rad)) / AIM_ANGLE_SCALE_RAD)
+
+
+def dense_aim_reward(aim_error_rad: float) -> float:
+    """Per-step pre-spawn reward for pointing the hood at the target."""
+    return AIM_ALIGN_REWARD_SCALE * aim_alignment_score(aim_error_rad)
+
+
+def aim_spawn_bonus(aim_error_rad: float) -> float:
+    """Bonus paid once when the ball spawns, scaled by aim quality."""
+    return AIM_SPAWN_BONUS * aim_alignment_score(aim_error_rad)
 
 
 def closeness(distance: float) -> float:

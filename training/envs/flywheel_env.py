@@ -16,6 +16,9 @@ from flywheel_rewards import (
     HIT_BONUS,
     timeout_terminal_reward,
     dense_distance_reward,
+    dense_aim_reward,
+    aim_spawn_bonus,
+    AIM_ANGLE_SCALE_RAD,
     compute_target_distances,
     impact_distance_on_face,
 )
@@ -61,25 +64,30 @@ class FlywheelVecEnv(VecEnv):
 
     cfg = {
         "model_path": MODEL_PATH,
-        "spawn_delay_steps": 20,
+        # Minimum control periods of flywheel spin-up before spawn is allowed.
+        # With frame_skip=5 and dt=0.002, 100 steps ≈ 1s — needed for gear=1800
+        # to reach curriculum Z. Actual spawn may wait longer for aim gate.
+        "spawn_delay_steps": 100,
+        # Force spawn by this step even if still off-boresight (avoid infinite wait).
+        "spawn_max_wait_steps": 250,
+        # Only release the ball once |aim_err| is under this (≈15°), matching the
+        # diagnosis band where deterministic hit rate jumped to ~39%.
+        "aim_spawn_max_rad": AIM_ANGLE_SCALE_RAD,
         "flywheel_spawn_ctrl": -1.0,
+        # Physics substeps per RL action. timestep=0.002 → 10ms control period.
+        # frame_skip=1 (old) let the policy retune voltage every 2-3ms, before
+        # contact had finished resolving, which favored chatter/oscillation.
+        "frame_skip": 5,
     }
 
     def __init__(
         self,
         num_envs: int = 16,
         device: str = "cpu",
-        # 600 steps (1.8s at timestep=0.003) sounds generous, but it isn't: launch
-        # velocities observed from a trained policy run 25-38 m/s vertically, which
-        # needs ~5.1-7.9s just to arc back down to floor height (time_of_flight ~=
-        # (v + sqrt(v^2 + 2*g*(launch_h - floor_h))) / g). At 600 steps, ~85% of
-        # episodes were timing out mid-ascent -- the ball was simply still flying
-        # when the clock ran out, never getting a chance to actually land near (or
-        # far from) the target. That looks identical to a training/RL problem (flat
-        # hit-rate plateau, no matter how learning rate/entropy/etc. are tuned) but
-        # is really an episode-length/physics-budget mismatch. 3000 steps (9s) covers
-        # the worst case seen with margin.
-        max_episode_length: int = 3000,
+        # Counted in *control* steps (each runs frame_skip physics steps).
+        # 900 * 5 * 0.002s ≈ 9s of sim time -- same flight budget as the old
+        # 3000 * 0.003s episodes, enough for 25-38 m/s launches to land.
+        max_episode_length: int = 900,
         seed: int | None = 0,
         episode_logger=None,
         curriculum_enabled: bool = False,
@@ -93,6 +101,7 @@ class FlywheelVecEnv(VecEnv):
         self.num_actions = 2
         self.device = device
         self.max_episode_length = max_episode_length
+        self.frame_skip = int(self.cfg["frame_skip"])
         self.episode_logger = episode_logger
 
         # Curriculum learning: start targets close/easy and widen the randomization
@@ -172,49 +181,58 @@ class FlywheelVecEnv(VecEnv):
 
             if not self.ball_spawned[env_id]:
                 self._hide_ball(handles)
-            elif self.episode_length_buf[env_id].item() >= self.cfg["spawn_delay_steps"]:
-                pass
-
-            if (
-                not self.ball_spawned[env_id]
-                and self.episode_length_buf[env_id].item() >= self.cfg["spawn_delay_steps"]
-            ):
-                self._spawn_ball(handles)
-                self.ball_spawned[env_id] = True
+                # Teach yaw alignment before launch (dominant miss mode).
+                aim_err = self._aim_error_rad(handles)
+                rewards[env_id] += dense_aim_reward(aim_err)
+                extras["log"]["/aim/error_rad"] = abs(aim_err)
+                t = int(self.episode_length_buf[env_id].item())
+                min_spin = int(self.cfg["spawn_delay_steps"])
+                max_wait = int(self.cfg["spawn_max_wait_steps"])
+                aim_gate = float(self.cfg["aim_spawn_max_rad"])
+                if t >= min_spin and (abs(aim_err) <= aim_gate or t >= max_wait):
+                    self._spawn_ball(handles)
+                    self.ball_spawned[env_id] = True
+                    rewards[env_id] += aim_spawn_bonus(aim_err)
+                    extras["log"]["/aim/spawn_err_rad"] = abs(aim_err)
+                    extras["log"]["/aim/spawn_gated"] = 1.0 if abs(aim_err) <= aim_gate else 0.0
 
             if self.ball_spawned[env_id]:
                 rewards[env_id] += self._dense_reward(env_id, handles)
 
-            mujoco.mj_step(handles.model, handles.data)
-            self.episode_length_buf[env_id] += 1
-
-            if self.ball_spawned[env_id]:
-                terminal_reward, done, outcome, impact_lateral = self._terminal_step(env_id, handles)
-                rewards[env_id] += terminal_reward
-                if done:
-                    dones[env_id] = True
-                    extras.setdefault("episode", {})
-                    extras["log"][f"/episode/outcome_{outcome}"] = 1.0
-                    episode_length = int(self.episode_length_buf[env_id].item())
-                    best_miss = self._finite_best_miss(env_id)
-                    self._record_episode_done(
-                        extras,
-                        env_id,
-                        outcome,
-                        impact_lateral=impact_lateral,
-                        best_miss=best_miss,
-                        episode_length=episode_length,
-                    )
-                    if self.episode_logger is not None:
-                        self.episode_logger.record(
+            # Hold ctrl fixed across frame_skip physics steps so contact can
+            # resolve before the next policy action.
+            for _ in range(self.frame_skip):
+                mujoco.mj_step(handles.model, handles.data)
+                if self.ball_spawned[env_id] and not dones[env_id]:
+                    terminal_reward, done, outcome, impact_lateral = self._terminal_step(env_id, handles)
+                    rewards[env_id] += terminal_reward
+                    if done:
+                        dones[env_id] = True
+                        extras.setdefault("episode", {})
+                        extras["log"][f"/episode/outcome_{outcome}"] = 1.0
+                        episode_length = int(self.episode_length_buf[env_id].item()) + 1
+                        best_miss = self._finite_best_miss(env_id)
+                        self._record_episode_done(
+                            extras,
                             env_id,
                             outcome,
-                            episode_length,
-                            impact_lateral,
-                            best_miss,
-                            curriculum_scale=self.curriculum_scale,
+                            impact_lateral=impact_lateral,
+                            best_miss=best_miss,
+                            episode_length=episode_length,
                         )
-                    self._update_curriculum(outcome == "hit")
+                        if self.episode_logger is not None:
+                            self.episode_logger.record(
+                                env_id,
+                                outcome,
+                                episode_length,
+                                impact_lateral,
+                                best_miss,
+                                curriculum_scale=self.curriculum_scale,
+                            )
+                        self._update_curriculum(outcome == "hit")
+                        break
+
+            self.episode_length_buf[env_id] += 1
 
             if self.episode_length_buf[env_id].item() >= self.max_episode_length and not dones[env_id]:
                 # Pay miss-quality terminal so a long near-miss beats dumping on
@@ -321,6 +339,18 @@ class FlywheelVecEnv(VecEnv):
         handles.model.geom_conaffinity[handles.ball_geom_id] = 1
         mujoco.mj_forward(handles.model, handles.data)
 
+    def _aim_error_rad(self, handles: EnvHandles) -> float:
+        """Signed off-boresight angle of the target in the hood frame (radians).
+
+        Barrel aims roughly +Y (spawn site y≈1.2). Remaining yaw to put the
+        target on the hood midplane is atan2(local_x, local_y).
+        """
+        hood_rot = handles.data.xmat[handles.hood_id].reshape(3, 3)
+        hood_pos = handles.data.xpos[handles.hood_id]
+        target_pos = handles.data.xpos[handles.body_id]
+        target_local = hood_rot.T @ (target_pos - hood_pos)
+        return float(np.arctan2(target_local[0], target_local[1]))
+
     def _dense_reward(self, env_id: int, handles: EnvHandles) -> float:
         """Per-step reward from exponential clamped distance score."""
         ball_pos = handles.data.xpos[handles.ball_id].copy()
@@ -374,7 +404,7 @@ class FlywheelVecEnv(VecEnv):
             if impact_distance <= hit_radius:
                 return HIT_BONUS, True, "hit", impact_distance
             # Fly-by miss: end the episode here. Previously these kept running to
-            # max_episode_length (3000), so a ~34-step miss collected thousands of
+            # max_episode_length (~900 control steps), so a short miss collected thousands of
             # extra dense-reward steps and the policy learned to coast to timeout
             # instead of aiming for hits.
             return timeout_terminal_reward(impact_distance), True, "miss", impact_distance

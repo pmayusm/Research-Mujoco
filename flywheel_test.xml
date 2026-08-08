@@ -43,11 +43,18 @@
         <mesh name="hood_p38" file="decomposed/hood_part_38.obj" scale="0.01 0.01 0.01" />
         <mesh name="hood_p39" file="decomposed/hood_part_39.obj" scale="0.01 0.01 0.01" />
     </asset>
+    <!-- Stiffer, higher-friction contacts: soft defaults made flywheel/ball
+         impacts resolve differently each hit (slip / chatter / occasional
+         clipping), which caps how consistent a launch policy can get. -->
     <default>
-        <geom contype="1" conaffinity="1"/>
+        <geom contype="1" conaffinity="1" condim="3"
+              friction="1.5 0.5 0.1"
+              solref="0.01 1"
+              solimp="0.9 0.95 0.001"/>
     </default>
 
-    <option timestep="0.003"
+    <!-- 2ms physics; RL applies controls every frame_skip steps (see env). -->
+    <option timestep="0.002"
             gravity="0 0 -9.81"
             iterations="50"
             solver="PGS"/>
@@ -117,7 +124,9 @@
                 <geom type="mesh"
                     mesh="flywheel"
                     density="1000"
-                    friction="3 0.5 0.5"
+                    friction="2.5 0.8 0.1"
+                    solref="0.008 1"
+                    solimp="0.9 0.95 0.001"
                     euler="0 90 0"
                     rgba="0 0 1 1"/>
             </body>
@@ -134,36 +143,35 @@
             <geom type="sphere"
                 size="0.6"
                 density="100"
-                friction="1 0.5 0.5"
-                solref="0.02 1"
+                friction="1.5 0.5 0.1"
+                solref="0.01 1"
                 solimp="0.9 0.95 0.001" />
         </body>
 
     </worldbody>
 
     <actuator>
-        <!-- Was gear=2000: the ball never cleanly separates from the flywheel after
-             contact (its hinge damping is tiny and the ball keeps re-contacting the
-             spinning surface), so it gets continuously re-accelerated for as long as
-             contact holds, rather than a single bounded launch impulse. At gear=2000,
-             a held command (e.g. a saturated policy output) built up to 60-100+ m/s
-             vertical speed over a few hundred steps -- needing 10-20+ seconds of flight
-             just to come back down, far beyond any reasonable episode length, and far
-             faster than needed to reach targets only a few meters away.
-             gear=400 was still too weak in real episode rollouts: open-loop hold at
-             full power only reached max_z ~3.3m, while curriculum scale 0.3 already
-             places targets in Z=[4.8, 7.2], so every episode was physically
-             unwinnable and the policy rationally collapsed to floor-drops.
-             gear=1000 is the new compromise: open-loop + crude yaw aiming gets
-             mean_max_z ~6.2m (covers the easy curriculum band) and a few % hits
-             without a learned policy, while still well below the old gear=2000
-             "launch into orbit" regime.
-        -->
-        <motor name="flywheel_motor" joint="flywheel_joint"
-            gear="1000"
+        <!-- gear=1800 + spawn_delay_steps=100: filtered actuators need spin-up.
+             gear=1000/spawn=20 only reached ~3.1m; curriculum 0.45 needs Z≈4-8m.
+             1800/spawn=100 reaches ~6.3m open-loop — covers the easy band without
+             the gear=2000 orbit regime. -->
+        <general name="flywheel_motor" joint="flywheel_joint"
+            gear="1800"
+            dyntype="filter"
+            dynprm="0.02"
+            gaintype="fixed"
+            gainprm="1"
+            biastype="none"
+            ctrllimited="true"
             ctrlrange="-1 1"/>
-         <motor name="yaw_motor" joint="yaw joint"
+         <general name="yaw_motor" joint="yaw joint"
             gear="200"
+            dyntype="filter"
+            dynprm="0.02"
+            gaintype="fixed"
+            gainprm="1"
+            biastype="none"
+            ctrllimited="true"
             ctrlrange="-1 1"/>
         <general name="ball_spawn" site="shooter_spawn"
             ctrllimited="true" ctrlrange="0 1"

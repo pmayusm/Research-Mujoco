@@ -28,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--num-envs", type=int, default=16)
     parser.add_argument("--num-episodes", type=int, default=100)
-    parser.add_argument("--max-episode-length", type=int, default=3000)
+    parser.add_argument("--max-episode-length", type=int, default=900)
     parser.add_argument("--device", type=str, default="cpu")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--stochastic", action="store_true", help="Sample actions instead of using the mean")
@@ -194,7 +194,7 @@ def run_evaluation(
     seed: int,
     stochastic: bool,
     curriculum_scale: float | None = None,
-    max_episode_length: int = 3000,
+    max_episode_length: int = 900,
 ) -> list[dict]:
     env_kwargs = {}
     if curriculum_scale is not None:
